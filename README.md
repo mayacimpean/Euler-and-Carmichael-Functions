@@ -1,0 +1,2 @@
+# Euler-and-Carmichael-Functions
+Code to run the Euler and Carmichael Functions, recording their computational time
