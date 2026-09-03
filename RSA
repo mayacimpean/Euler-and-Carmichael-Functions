@@ -1,0 +1,821 @@
+from math import gcd, isqrt
+import random
+import time
+
+
+# =============================================================
+# KARATSUBA MULTIPLICATION
+# =============================================================
+
+def karatsuba(x, y):
+    """
+    Multiply two non-negative integers using the Karatsuba algorithm.
+    """
+
+    # For small numbers, normal multiplication is faster.
+    if x < 1024 or y < 1024:
+        return x * y
+
+    n = max(x.bit_length(), y.bit_length())
+    m = n // 2
+
+    mask = (1 << m) - 1
+
+    x1, x0 = x >> m, x & mask
+    y1, y0 = y >> m, y & mask
+
+    z2 = karatsuba(x1, y1)
+    z0 = karatsuba(x0, y0)
+    z1 = karatsuba(x1 + x0, y1 + y0) - z2 - z0
+
+    return (z2 << (2 * m)) + (z1 << m) + z0
+
+
+# =============================================================
+# PRIME TEST
+# =============================================================
+
+def is_prime(n):
+    """
+    Return True if n is prime and False otherwise.
+    """
+
+    if n < 2:
+        return False
+
+    if n == 2:
+        return True
+
+    if n % 2 == 0:
+        return False
+
+    # Trial division by odd integers up to sqrt(n).
+    for i in range(3, isqrt(n) + 1, 2):
+
+        if n % i == 0:
+            return False
+
+    return True
+
+
+# =============================================================
+# EXTENDED EUCLIDEAN ALGORITHM
+# =============================================================
+
+def extended_gcd(a, b):
+    """
+    Return gcd(a, b) together with x and y such that:
+
+        ax + by = gcd(a, b)
+    """
+
+    if b == 0:
+        return a, 1, 0
+
+    g, x1, y1 = extended_gcd(
+        b,
+        a % b
+    )
+
+    x = y1
+    y = x1 - (a // b) * y1
+
+    return g, x, y
+
+
+# =============================================================
+# MODULAR INVERSE
+# =============================================================
+
+def mod_inverse(a, m):
+    """
+    Find the modular inverse of a modulo m using the
+    Extended Euclidean Algorithm.
+
+    Finds d such that:
+
+        a*d ≡ 1 (mod m)
+    """
+
+    g, x, _ = extended_gcd(a, m)
+
+    if g != 1:
+        return -1
+
+    return x % m
+
+
+# =============================================================
+# LEAST COMMON MULTIPLE
+# =============================================================
+
+def lcm(a, b):
+    """
+    Return the least common multiple of a and b.
+    """
+
+    return abs(a * b) // gcd(a, b)
+
+
+# =============================================================
+# GENERATE LIST OF CANDIDATE PRIMES
+# =============================================================
+
+def generate_prime_list(keysize):
+    """
+    Generate candidate primes for an RSA modulus of
+    approximately the requested bit length.
+    """
+
+    start = 1 << (keysize // 2 - 1)
+    stop = 1 << (keysize // 2 + 1)
+
+    if start >= stop:
+        raise ValueError(
+            "Key size too small."
+        )
+
+    primes = [
+        number
+        for number in range(start, stop + 1)
+        if is_prime(number)
+    ]
+
+    return primes
+
+
+# =============================================================
+# GENERATE p, q AND n
+# =============================================================
+
+def generate_prime_pair(keysize, primes):
+    """
+    Select distinct primes p and q such that:
+
+        n = p*q
+
+    has the requested bit length.
+    """
+
+    nMin = 1 << (keysize - 1)
+    nMax = (1 << keysize) - 1
+
+    candidates = list(primes)
+    random.shuffle(candidates)
+
+    for p in candidates:
+
+        q_values = [
+            q
+            for q in primes
+
+            if q != p
+
+            and nMin
+            <= karatsuba(p, q)
+            <= nMax
+        ]
+
+        if q_values:
+
+            q = random.choice(q_values)
+
+            n = karatsuba(
+                p,
+                q
+            )
+
+            return p, q, n
+
+    raise ValueError(
+        "Could not find a suitable prime pair."
+    )
+
+
+# =============================================================
+# CHOOSE COMMON PUBLIC EXPONENT e
+# =============================================================
+
+def choose_public_exponent(phi):
+    """
+    Choose e such that:
+
+        gcd(e, phi(n)) = 1
+
+    Since lambda(n) divides phi(n), this also ensures
+    that e is coprime to lambda(n).
+    """
+
+    while True:
+
+        e = random.randrange(
+            2,
+            phi
+        )
+
+        if gcd(e, phi) == 1:
+            return e
+
+
+# =============================================================
+# EULER KEY DERIVATION
+# =============================================================
+
+def generate_euler_private_key(p, q, e):
+    """
+    Use Euler's totient function:
+
+        phi(n) = (p - 1)(q - 1)
+
+    and calculate:
+
+        d = e^(-1) mod phi(n)
+    """
+
+    phi = karatsuba(
+        p - 1,
+        q - 1
+    )
+
+    d = mod_inverse(
+        e,
+        phi
+    )
+
+    if d == -1:
+        raise ValueError(
+            "Euler modular inverse does not exist."
+        )
+
+    return phi, d
+
+
+# =============================================================
+# CARMICHAEL KEY DERIVATION
+# =============================================================
+
+def generate_carmichael_private_key(p, q, e):
+    """
+    Use the Carmichael function:
+
+        lambda(n) = lcm(p - 1, q - 1)
+
+    and calculate:
+
+        d = e^(-1) mod lambda(n)
+    """
+
+    lambda_n = lcm(
+        p - 1,
+        q - 1
+    )
+
+    d = mod_inverse(
+        e,
+        lambda_n
+    )
+
+    if d == -1:
+        raise ValueError(
+            "Carmichael modular inverse does not exist."
+        )
+
+    return lambda_n, d
+
+
+# =============================================================
+# ENCRYPTION
+# =============================================================
+
+def encrypt(plaintext, public_key):
+    """
+    Encrypt plaintext using:
+
+        c = m^e mod n
+    """
+
+    e, n = public_key
+
+    return [
+        pow(ord(character), e, n)
+        for character in plaintext
+    ]
+
+
+# =============================================================
+# DECRYPTION
+# =============================================================
+
+def decrypt(ciphertext, private_key):
+    """
+    Decrypt ciphertext using:
+
+        m = c^d mod n
+    """
+
+    d, n = private_key
+
+    return ''.join(
+        chr(pow(character, d, n))
+        for character in ciphertext
+    )
+
+
+# =============================================================
+# MAIN EXPERIMENT
+# =============================================================
+
+if __name__ == "__main__":
+
+    min_bit_length = int(
+        input("Enter minimum bit length: ")
+    )
+
+    max_bit_length = int(
+        input("Enter maximum bit length: ")
+    )
+
+    repeats = int(
+        input("Enter number of repetitions per bit length: ")
+    )
+
+    message = input(
+        "Enter message: "
+    )
+
+
+    if repeats <= 0:
+        raise ValueError(
+            "Number of repetitions must be greater than zero."
+        )
+
+    if min_bit_length > max_bit_length:
+        raise ValueError(
+            "Minimum bit length must not exceed maximum bit length."
+        )
+
+
+    if message:
+
+        max_character_value = max(
+            ord(character)
+            for character in message
+        )
+
+    else:
+
+        max_character_value = 0
+
+
+    # =========================================================
+    # RANDOMISE BIT-LENGTH TESTING ORDER
+    # =========================================================
+
+    bit_lengths = list(
+        range(
+            min_bit_length,
+            max_bit_length + 1
+        )
+    )
+
+    random.shuffle(bit_lengths)
+
+    print("\nRandom testing order:")
+    print(bit_lengths)
+    print()
+
+
+    # Store all completed results.
+    results = []
+
+
+    # =========================================================
+    # TEST EACH BIT LENGTH IN RANDOM ORDER
+    # =========================================================
+
+    for bit_length in bit_lengths:
+
+        minimum_possible_n = (
+            1 << (bit_length - 1)
+        )
+
+
+        # Skip bit lengths where the modulus may be too small
+        # to represent the characters in the message.
+        if (
+            bit_length < 3
+            or minimum_possible_n <= max_character_value
+        ):
+
+            results.append([
+                bit_length,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None
+            ])
+
+            continue
+
+
+        try:
+
+            # Generate candidate primes once for this bit length.
+            primes = generate_prime_list(
+                bit_length
+            )
+
+
+            # -------------------------------------------------
+            # TOTAL TIMES
+            # -------------------------------------------------
+
+            total_euler_key = 0.0
+            total_euler_encrypt = 0.0
+            total_euler_decrypt = 0.0
+
+            total_carmichael_key = 0.0
+            total_carmichael_encrypt = 0.0
+            total_carmichael_decrypt = 0.0
+
+
+            # =================================================
+            # REPEAT EXPERIMENT
+            # =================================================
+
+            for repetition in range(repeats):
+
+
+                # -------------------------------------------------
+                # SAME p, q, n AND e FOR BOTH METHODS
+                # -------------------------------------------------
+
+                p, q, n = generate_prime_pair(
+                    bit_length,
+                    primes
+                )
+
+
+                # Calculate phi only to select a common e.
+                # This is outside the timed key-derivation sections.
+                phi_for_e = karatsuba(
+                    p - 1,
+                    q - 1
+                )
+
+
+                e = choose_public_exponent(
+                    phi_for_e
+                )
+
+
+                public_key = (
+                    e,
+                    n
+                )
+
+
+                # =================================================
+                # EULER KEY DERIVATION
+                # =================================================
+
+                start = time.perf_counter()
+
+                phi, d_euler = (
+                    generate_euler_private_key(
+                        p,
+                        q,
+                        e
+                    )
+                )
+
+                end = time.perf_counter()
+
+                total_euler_key += (
+                    end - start
+                )
+
+
+                euler_private_key = (
+                    d_euler,
+                    n
+                )
+
+
+                # =================================================
+                # CARMICHAEL KEY DERIVATION
+                # =================================================
+
+                start = time.perf_counter()
+
+                lambda_n, d_carmichael = (
+                    generate_carmichael_private_key(
+                        p,
+                        q,
+                        e
+                    )
+                )
+
+                end = time.perf_counter()
+
+                total_carmichael_key += (
+                    end - start
+                )
+
+
+                carmichael_private_key = (
+                    d_carmichael,
+                    n
+                )
+
+
+                # =================================================
+                # ALTERNATE EULER / CARMICHAEL TIMING ORDER
+                # =================================================
+                #
+                # This helps reduce any systematic timing advantage
+                # caused by always testing one method first.
+                # =================================================
+
+                if repetition % 2 == 0:
+
+
+                    # ---------------------------------------------
+                    # EULER ENCRYPTION
+                    # ---------------------------------------------
+
+                    start = time.perf_counter()
+
+                    encrypted_euler = encrypt(
+                        message,
+                        public_key
+                    )
+
+                    end = time.perf_counter()
+
+                    total_euler_encrypt += (
+                        end - start
+                    )
+
+
+                    # ---------------------------------------------
+                    # CARMICHAEL ENCRYPTION
+                    # ---------------------------------------------
+
+                    start = time.perf_counter()
+
+                    encrypted_carmichael = encrypt(
+                        message,
+                        public_key
+                    )
+
+                    end = time.perf_counter()
+
+                    total_carmichael_encrypt += (
+                        end - start
+                    )
+
+
+                    # ---------------------------------------------
+                    # EULER DECRYPTION
+                    # ---------------------------------------------
+
+                    start = time.perf_counter()
+
+                    decrypted_euler = decrypt(
+                        encrypted_euler,
+                        euler_private_key
+                    )
+
+                    end = time.perf_counter()
+
+                    total_euler_decrypt += (
+                        end - start
+                    )
+
+
+                    # ---------------------------------------------
+                    # CARMICHAEL DECRYPTION
+                    # ---------------------------------------------
+
+                    start = time.perf_counter()
+
+                    decrypted_carmichael = decrypt(
+                        encrypted_carmichael,
+                        carmichael_private_key
+                    )
+
+                    end = time.perf_counter()
+
+                    total_carmichael_decrypt += (
+                        end - start
+                    )
+
+
+                else:
+
+
+                    # ---------------------------------------------
+                    # CARMICHAEL ENCRYPTION
+                    # ---------------------------------------------
+
+                    start = time.perf_counter()
+
+                    encrypted_carmichael = encrypt(
+                        message,
+                        public_key
+                    )
+
+                    end = time.perf_counter()
+
+                    total_carmichael_encrypt += (
+                        end - start
+                    )
+
+
+                    # ---------------------------------------------
+                    # EULER ENCRYPTION
+                    # ---------------------------------------------
+
+                    start = time.perf_counter()
+
+                    encrypted_euler = encrypt(
+                        message,
+                        public_key
+                    )
+
+                    end = time.perf_counter()
+
+                    total_euler_encrypt += (
+                        end - start
+                    )
+
+
+                    # ---------------------------------------------
+                    # CARMICHAEL DECRYPTION
+                    # ---------------------------------------------
+
+                    start = time.perf_counter()
+
+                    decrypted_carmichael = decrypt(
+                        encrypted_carmichael,
+                        carmichael_private_key
+                    )
+
+                    end = time.perf_counter()
+
+                    total_carmichael_decrypt += (
+                        end - start
+                    )
+
+
+                    # ---------------------------------------------
+                    # EULER DECRYPTION
+                    # ---------------------------------------------
+
+                    start = time.perf_counter()
+
+                    decrypted_euler = decrypt(
+                        encrypted_euler,
+                        euler_private_key
+                    )
+
+                    end = time.perf_counter()
+
+                    total_euler_decrypt += (
+                        end - start
+                    )
+
+
+                # =================================================
+                # VERIFY CORRECTNESS
+                # =================================================
+
+                if decrypted_euler != message:
+
+                    raise ValueError(
+                        "Euler decryption failed."
+                    )
+
+                if decrypted_carmichael != message:
+
+                    raise ValueError(
+                        "Carmichael decryption failed."
+                    )
+
+
+            # =====================================================
+            # CALCULATE AVERAGES
+            # =====================================================
+
+            average_euler_key = (
+                total_euler_key / repeats
+            )
+
+            average_euler_encrypt = (
+                total_euler_encrypt / repeats
+            )
+
+            average_euler_decrypt = (
+                total_euler_decrypt / repeats
+            )
+
+            average_carmichael_key = (
+                total_carmichael_key / repeats
+            )
+
+            average_carmichael_encrypt = (
+                total_carmichael_encrypt / repeats
+            )
+
+            average_carmichael_decrypt = (
+                total_carmichael_decrypt / repeats
+            )
+
+
+            # Store results.
+            results.append([
+                bit_length,
+                average_euler_key,
+                average_euler_encrypt,
+                average_euler_decrypt,
+                average_carmichael_key,
+                average_carmichael_encrypt,
+                average_carmichael_decrypt
+            ])
+
+
+        except ValueError:
+
+            results.append([
+                bit_length,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None
+            ])
+
+
+    # =============================================================
+    # SORT RESULTS BACK INTO NUMERICAL ORDER
+    # =============================================================
+
+    results.sort(
+        key=lambda row: row[0]
+    )
+
+
+    # =============================================================
+    # OUTPUT TABLE
+    # =============================================================
+    #
+    # Output is tab-separated so it can be copied directly
+    # from Colab into Excel.
+    # =============================================================
+
+    print(
+        f"\nAVERAGE TIMES OVER {repeats} REPETITIONS"
+    )
+
+    print()
+
+    print(
+        "Bits\t"
+        "Euler Key (s)\t"
+        "Euler Encryption (s)\t"
+        "Euler Decryption (s)\t"
+        "Carmichael Key (s)\t"
+        "Carmichael Encryption (s)\t"
+        "Carmichael Decryption (s)"
+    )
+
+
+    for row in results:
+
+        if row[1] is None:
+
+            print(
+                f"{row[0]}\t"
+                "N/A\t"
+                "N/A\t"
+                "N/A\t"
+                "N/A\t"
+                "N/A\t"
+                "N/A"
+            )
+
+        else:
+
+            print(
+                f"{row[0]}\t"
+                f"{row[1]:.12e}\t"
+                f"{row[2]:.12e}\t"
+                f"{row[3]:.12e}\t"
+                f"{row[4]:.12e}\t"
+                f"{row[5]:.12e}\t"
+                f"{row[6]:.12e}"
+            )
